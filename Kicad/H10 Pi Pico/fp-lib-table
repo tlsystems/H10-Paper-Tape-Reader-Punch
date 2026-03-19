@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "H10 Controller")(type "KiCad")(uri "$(KIPRJMOD)/H10 Pi Pico.pretty")(options "")(descr ""))
+)
