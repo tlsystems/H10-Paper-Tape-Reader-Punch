@@ -6,8 +6,8 @@
 	(paper "A")
 	(title_block
 		(title "H10 Simulator Interconnection Logic")
-		(date "2026-03-19")
-		(rev "V0.1")
+		(date "2026-03-20")
+		(rev "V0.2")
 		(company "Salt Creek Software")
 	)
 	(lib_symbols
