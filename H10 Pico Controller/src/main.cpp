@@ -1,11 +1,11 @@
 #include <Arduino.h>
 #include <spi.h>
-#include "H10_Controller.h"
+#include "UART_Communications.h"
 #include "H10_Manager.h"
 
 #include "defs.h"
 
-H10_Controller h10Controller(PunchStart, PunchReady, ReaderReady, ReaderStart, ReadDataLoad, PunchDataLatch);
+UART_Communications h10Controller(PunchStart, PunchReady, ReaderReady, ReaderStart, ReadDataLoad, PunchDataLatch);
 H10_Manager h10Manager(Serial1, RS232_RX, RS232_TX, RS232_RTS, RS232_CTS);
 
 // put function declarations here:
@@ -73,5 +73,8 @@ void loop()
 			}
 		}
 	}
-}
+
+	if (h10Manager.hasLine())
+	(
+		h10Manager.processCommand();
 

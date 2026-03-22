@@ -5,8 +5,24 @@
 class SerialUART;
 extern "C" typedef struct uart_inst uart_inst_t;
 
+constexpr byte MAX_RX_LINE_LEN = 144;
+
 class H10_Manager
 {
+public:
+	enum eCmd
+	{
+		cmdInvalid,		
+		cmdHelp,		// ?  - Displays help information
+		cmdEcho,		// EC - Echo Mode 
+		cmdPunchByte,	// PB - Punch byte
+		cmdPunchText,	// PT - Punch text
+		cmdPunchHex,	// PH - Punch Hex record
+		cmdPunchLeader,	// PL - Punch empty leader
+		cmdReadByte,	// RB - Read byte
+		cmdReadHex,		// RH - Read Hex record
+	};
+
 public:
 	H10_Manager(
 		SerialUART& serialPort,
@@ -25,6 +41,20 @@ public:
 	int available();
 	int read();
 	size_t write(uint8_t data);
+	
+	void processCommand(class UART_Communications& controller);
+private:
+	void parseCommand();
+	// high level commands
+	void doCommand(eCmd cmd);
+	void doHelpCommand();
+	void doEchoCommand();
+	void doPunchByteCommand();
+	void doPunchTextCommand();
+	void doPunchHexCommand();
+	void doPunchLeaderCommand();
+	void doReadByteCommand();
+	void doReadHexCommand();
 
 private:
 	static constexpr size_t kLineBufferSize = 128;
