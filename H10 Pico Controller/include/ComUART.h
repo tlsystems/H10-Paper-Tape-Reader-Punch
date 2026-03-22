@@ -1,13 +1,14 @@
 #pragma once
 
 #include <Arduino.h>
+#include "ICom.h"
 
 class SerialUART;
 extern "C" typedef struct uart_inst uart_inst_t;
 
 constexpr byte MAX_RX_LINE_LEN = 144;
 
-class ComUART
+class ComUART : public ICom
 {
 public:
 	ComUART(
@@ -18,15 +19,15 @@ public:
 		uint8_t ctsPin
 	);
 
-	void begin(uint32_t baudRate = 115200, uint16_t config = SERIAL_8N1);
-	bool hasLine() const;
-	size_t readLine(char* outBuffer, size_t outBufferSize);
-	bool overflowed() const;
-	void clearLine();
+	void begin(uint32_t baudRate = 115200, uint16_t config = SERIAL_8N1) override;
+	bool hasLine() const override;
+	size_t readLine(char* outBuffer, size_t outBufferSize) override;
+	bool overflowed() const override;
+	void clearLine() override;
 
-	int available();
-	int read();
-	size_t write(uint8_t data);
+	int available() override;
+	int read() override;
+	size_t write(uint8_t data) override;
 
 private:
 	static constexpr size_t kLineBufferSize = 128;
