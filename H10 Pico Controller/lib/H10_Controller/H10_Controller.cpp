@@ -1,8 +1,8 @@
-#include "UART_Communications.h"
+#include "H10_Controller.h"
 
-UART_Communications* UART_Communications::_activeInstance = nullptr;
+H10_Controller* H10_Controller::_activeInstance = nullptr;
 
-UART_Communications::UART_Communications(	uint8_t punchStart,	uint8_t punchReady,	uint8_t readerReady, uint8_t readerStart,
+H10_Controller::H10_Controller(	uint8_t punchStart,	uint8_t punchReady,	uint8_t readerReady, uint8_t readerStart,
 								uint8_t readDataLoad, uint8_t punchDataLatch) :
 		_punchStart(punchStart),
 		_punchReady(punchReady),
@@ -13,7 +13,7 @@ UART_Communications::UART_Communications(	uint8_t punchStart,	uint8_t punchReady
 {
 }
 
-void UART_Communications::begin()
+void H10_Controller::begin()
 {
 	pinMode(_punchStart,    OUTPUT);
 	pinMode(_punchReady,    INPUT);
@@ -29,18 +29,18 @@ void UART_Communications::begin()
 
 	// Route punch-ready and reader-ready rising edges to this controller instance.
 	_activeInstance = this;
-	attachInterrupt(digitalPinToInterrupt(_punchReady),  UART_Communications::onPunchReadyISR,  RISING);
-	attachInterrupt(digitalPinToInterrupt(_readerReady), UART_Communications::onReaderReadyISR, RISING);
+	attachInterrupt(digitalPinToInterrupt(_punchReady),  H10_Controller::onPunchReadyISR,  RISING);
+	attachInterrupt(digitalPinToInterrupt(_readerReady), H10_Controller::onReaderReadyISR, RISING);
 }
 
 // ---------- Reader ----------
 
-bool UART_Communications::isReaderReady()
+bool H10_Controller::isReaderReady()
 {
 	return digitalRead(_readerReady) == HIGH;
 }
 
-uint8_t UART_Communications::readByte()
+uint8_t H10_Controller::readByte()
 {
 	// Assert ReaderStart to advance the tape one frame
 	digitalWrite(_readerStart, HIGH);
@@ -61,12 +61,12 @@ uint8_t UART_Communications::readByte()
 
 // ---------- Punch ----------
 
-bool UART_Communications::isPunchReady()
+bool H10_Controller::isPunchReady()
 {
 	return digitalRead(_punchReady) == HIGH;
 }
 
-void UART_Communications::punchByte(uint8_t data)
+void H10_Controller::punchByte(uint8_t data)
 {
 	// Shift data into the latch via SPI
 	SPI.transfer(data);
@@ -84,7 +84,7 @@ void UART_Communications::punchByte(uint8_t data)
 
 // Called from ISR context when _punchReady rises.
 // Punches the next byte from _punchBuf if one is available.
-void UART_Communications::onPunchReadyISR()
+void H10_Controller::onPunchReadyISR()
 {
 	if (_activeInstance != nullptr)
 	{
@@ -92,7 +92,7 @@ void UART_Communications::onPunchReadyISR()
 	}
 }
 
-void UART_Communications::onPunchReady()
+void H10_Controller::onPunchReady()
 {
 	uint8_t data = 0;
 	if (_punchBuf.pop(data))
@@ -104,7 +104,7 @@ void UART_Communications::onPunchReady()
 // Called from ISR context when _readerReady rises.
 // Latches the parallel data, clocks it out via SPI, and stores it in _readerBuf.
 // If _readerBuf is full, the reader-ready interrupt is disabled until space is available.
-void UART_Communications::onReaderReadyISR()
+void H10_Controller::onReaderReadyISR()
 {
 	if (_activeInstance != nullptr)
 	{
@@ -112,7 +112,7 @@ void UART_Communications::onReaderReadyISR()
 	}
 }
 
-void UART_Communications::onReaderReady()
+void H10_Controller::onReaderReady()
 {
 	// Latch the parallel data into the shift register
 	digitalWrite(_readDataLoad, LOW);

@@ -1,361 +1,337 @@
 #include "H10_Manager.h"
+#include <string.h>
+#include <ctype.h>
 
-#include <SerialUART.h>
-#include <hardware/irq.h>
-#include <hardware/uart.h>
-
-H10_Manager* H10_Manager::_activeInstance = nullptr;
-
-H10_Manager::H10_Manager(SerialUART& serialPort, uint8_t rxPin,	uint8_t txPin,	uint8_t rtsPin,	uint8_t ctsPin)	:
-	_serialPort(serialPort),
-	_uart((&serialPort == &Serial1) ? uart0 : uart1),
-	_rxPin(rxPin),
-	_txPin(txPin),
-	_rtsPin(rtsPin),
-	_ctsPin(ctsPin),
-	_lineLength(0),
-	_lineReady(false),
-	_overflow(false),
-	_skipNextLF(false)
+namespace
 {
-}
-
-void H10_Manager::begin(uint32_t baudRate, uint16_t config)
-{
-	_serialPort.setRX(_rxPin);
-	_serialPort.setTX(_txPin);
-	_serialPort.setRTS(_rtsPin);
-	_serialPort.setCTS(_ctsPin);
-	_serialPort.begin(baudRate, config);
-
-	_lineLength = 0;
-	_lineReady = false;
-	_overflow = false;
-	_skipNextLF = false;
-
-	_activeInstance = this;
-	irq_num_t irq = (_uart == uart0) ? UART0_IRQ : UART1_IRQ;
-	irq_set_exclusive_handler(irq, H10_Manager::onUartRxIRQ);
-	irq_set_enabled(irq, true);
-	uart_set_irq_enables(_uart, true, false);
-}
-
-bool H10_Manager::hasLine() const
-{
-	return _lineReady;
-}
-
-size_t H10_Manager::readLine(char* outBuffer, size_t outBufferSize)
-{
-	if ((outBuffer == nullptr) || (outBufferSize == 0))
+	int hexToNibble(char chHex)
 	{
-		return 0;
+		if (chHex >= '0' && chHex <= '9') return chHex - '0';
+		if (chHex >= 'a' && chHex <= 'f') return chHex - 'a' + 10;
+		if (chHex >= 'A' && chHex <= 'F') return chHex - 'A' + 10;
+		return -1;
 	}
 
-	noInterrupts();
-	if (!_lineReady)
+	bool parseHexByte(const char* data, size_t length, size_t index, uint8_t& out)
 	{
-		interrupts();
-		outBuffer[0] = '\0';
-		return 0;
-	}
-
-	size_t copyLen = _lineLength;
-	if (copyLen >= outBufferSize)
-	{
-		copyLen = outBufferSize - 1;
-	}
-
-	for (size_t i = 0; i < copyLen; ++i)
-	{
-		outBuffer[i] = _lineBuffer[i];
-	}
-	outBuffer[copyLen] = '\0';
-
-	_lineLength = 0;
-	_lineReady = false;
-	_overflow = false;
-	_skipNextLF = false;
-	uart_set_irq_enables(_uart, true, false);
-	interrupts();
-
-	return copyLen;
-}
-
-bool H10_Manager::overflowed() const
-{
-	return _overflow;
-}
-
-void H10_Manager::clearLine()
-{
-	noInterrupts();
-	_lineLength = 0;
-	_lineReady = false;
-	_overflow = false;
-	_skipNextLF = false;
-	uart_set_irq_enables(_uart, true, false);
-	interrupts();
-}
-
-int H10_Manager::available()
-{
-	if (_lineReady)
-	{
-		return static_cast<int>(_lineLength);
-	}
-	return 0;
-}
-
-int H10_Manager::read()
-{
-	char c = 0;
-	if (readLine(&c, 2) > 0)
-	{
-		return static_cast<uint8_t>(c);
-	}
-	return -1;
-}
-
-size_t H10_Manager::write(uint8_t data)
-{
-	return _serialPort.write(data);
-}
-
-void H10_Manager::onUartRxIRQ()
-{
-	if (_activeInstance != nullptr)
-	{
-		_activeInstance->handleUartRxIRQ();
-	}
-}
-
-void H10_Manager::handleUartRxIRQ()
-{
-	while (uart_is_readable(_uart))
-	{
-		char c = static_cast<char>(uart_getc(_uart));
-
-		if (_skipNextLF && (c == '\n'))
+		if ((index + 1) >= length)
 		{
-			_skipNextLF = false;
-			continue;
-		}
-		_skipNextLF = false;
-
-		if (_lineReady)
-		{
-			continue;
+			return false;
 		}
 
-		if ((c == '\r') || (c == '\n'))
+		const int hi = hexToNibble(data[index]);
+		const int lo = hexToNibble(data[index + 1]);
+		if (hi < 0 || lo < 0)
+			return false;
+
+		out = static_cast<uint8_t>((hi << 4) | lo);
+		return true;
+	}
+}
+
+H10_Manager::H10_Manager(ComUART& comDevice)
+	: _comDevice(comDevice), _lineLength(0), bEcho(false), _hexDataLength(0)
+{
+	memset(_lineBuffer, 0, sizeof(_lineBuffer));
+	_lastCommand.command = cmdNone;
+	_lastCommand.data = nullptr;
+	_lastCommand.dataLength = 0;
+	memset(_hexData, 0, sizeof(_hexData));
+}
+
+H10_Manager::ParsedCommand H10_Manager::update()
+{
+	// Reset to no command
+	ParsedCommand result;
+	result.command = cmdNone;
+	result.data = nullptr;
+	result.dataLength = 0;
+
+	// Check if there's a line ready
+	if (!_comDevice.hasLine())
+	{
+		return result;
+	}
+
+	// Read the line from manager
+	size_t readLen = _comDevice.readLine(_lineBuffer, kLineBufferSize);
+	_lineLength = readLen;
+
+	// Parse the command
+	if (readLen > 0)
+	{
+		result = parseCommand(_lineBuffer, readLen);
+		_lastCommand = result;
+	}
+
+	return result;
+}
+
+H10_Manager::ParsedCommand H10_Manager::parseCommand(const char* line, size_t length)
+{
+	ParsedCommand result;
+	result.command = cmdNone;
+	result.data = nullptr;
+	result.dataLength = 0;
+
+	if (line == nullptr || length < 1)
+	{
+		result.command = cmdUnknown;
+		return result;
+	}
+
+	// Check if first character is '?' (single character help command)
+	if (line[0] == '?')
+	{
+		result.command = cmdHelp;
+		doHelp(result);
+		return result;
+	}
+
+	// For other commands, need at least 2 characters
+	if (length < 2)
+	{
+		result.command = cmdUnknown;
+		return result;
+	}
+
+	// Extract the first two characters as the command
+	char cmdStr[3] = {0};
+	cmdStr[0] = static_cast<char>(toupper(line[0]));
+	cmdStr[1] = static_cast<char>(toupper(line[1]));
+	cmdStr[2] = '\0';
+
+	// Identify the command directly in parseCommand using string compares.
+	if (strcmp(cmdStr, "EC") == 0) 		result.command = cmdEcho;
+	else if (strcmp(cmdStr, "PB") == 0) result.command = cmdPunchByte;
+	else if (strcmp(cmdStr, "PT") == 0) result.command = cmdPunchText;
+	else if (strcmp(cmdStr, "PH") == 0)	result.command = cmdPunchHex;
+	else if (strcmp(cmdStr, "PL") == 0) result.command = cmdPunchLeader;
+	else if (strcmp(cmdStr, "RB") == 0) result.command = cmdReadByte;
+	else if (strcmp(cmdStr, "RH") == 0) result.command = cmdReadHex;
+	else 
+		result.command = cmdUnknown;
+
+	if (result.command == cmdEcho ||
+		result.command == cmdPunchByte ||
+		result.command == cmdPunchText ||
+		result.command == cmdPunchHex)
+	{
+		// Data commands must be "CC <data>".
+		if ((length < 4) || (line[2] != ' '))
 		{
-			_lineReady = true;
-			if (c == '\r')
-			{
-				_skipNextLF = true;
-			}
-			uart_set_irq_enables(_uart, false, false);
+			result.command = cmdUnknown;
+			return result;
+		}
+
+		result.data = &line[3];
+		result.dataLength = length - 3;
+	}
+	else if (length > 2)
+	{
+		result.data = &line[2];
+		result.dataLength = length - 2;
+	}
+
+	switch (result.command)
+	{
+		case cmdEcho:			doEcho(result);			break;
+		case cmdPunchByte:		doPunchByte(result);	break;
+		case cmdPunchText:		doPunchText(result);	break;	
+		case cmdPunchHex:		doPunchHex(result);		break;
+		case cmdPunchLeader:	doPunchLeader(result);	break;
+		case cmdReadByte:		doReadByte(result);		break;
+		case cmdReadHex:		doReadHex(result);		break;
+		default:
 			break;
-		}
-
-		if (_lineLength < kLineBufferSize)
-		{
-			_lineBuffer[_lineLength] = c;
-			++_lineLength;
-		}
-		else
-		{
-			_overflow = true;
-		}
 	}
+
+	return result;
 }
 
-void H10_Manager::processCommand(UART_Communications& controller)
+void H10_Manager::doHelp(const ParsedCommand& parsedCommand)
 {
-	if (!hasLine())
+	(void)parsedCommand;
+}
+
+void H10_Manager::doEcho(const ParsedCommand& parsedCommand)
+{
+	if (parsedCommand.dataLength == 0 || parsedCommand.data == nullptr)
 	{
 		return;
 	}
 
-	parseCommand();
-
-	char commandBuffer[kLineBufferSize];
-	size_t commandLength = readLine(commandBuffer, sizeof(commandBuffer));
-
-	if (commandLength > 0)
-	{
-		controller.processCommand(commandBuffer, commandLength);
-	}
+	bEcho = (parsedCommand.data[0] != '0');
 }
 
-void H10_Manager::parseCommand()
+void H10_Manager::doPunchByte(const ParsedCommand& parsedCommand)
 {
-	eCmd cmd = cmdInvalid;
+	(void)parsedCommand;
+}
 
-	// transfer command to _command
-	for (int i = 0; i < MAX_RX_LINE_LEN; i++)
+void H10_Manager::doPunchText(const ParsedCommand& parsedCommand)
+{
+	(void)parsedCommand;
+}
+
+void H10_Manager::doPunchHex(const ParsedCommand& parsedCommand)
+{
+	_hexDataLength = 0;
+
+	if (parsedCommand.data == nullptr || parsedCommand.dataLength < 11)
 	{
-		if (_commandLine[i] == ' ')
-		{
-			_commandLine[i] = '\0';
-
-			// set pointer to data
-			_pData = &_commandLine[i + 1];
-			break;
-		}
-		_command[i] = (char)_commandLine[i];
+		return;
 	}
 
-	if		(strcmp(_command, "?") == 0)	cmd = cmdHelp;
-	else if (strcmp(_command, "EC") == 0) 	cmd = cmdEcho;
-	else if (strcmp(_command, "PB") == 0)	cmd = cmdPunchByte;
-	else if (strcmp(_command, "PT") == 0)	cmd = cmdPunchText;
-	else if (strcmp(_command, "PH") == 0)	cmd = cmdPunchHex;
-	else if (strcmp(_command, "PL") == 0)	cmd = cmdPunchLeader;
-	else if (strcmp(_command, "RB") == 0)	cmd = cmdReadByte;
-	else if (strcmp(_command, "RH") == 0)	cmd = cmdReadHex;
-
-	//diagPrintCommand();
-	//SerialUSB.print(" was transferred\n");
-}
-void H10_Manager::doHelpCommand(CH10_Com* pCom)
-{
-	SerialUSB.write("doHelp\n");
-	Serial1.write("doHelp\n");
-	pCom->sendText("Commands:\n");
-	return;
-	pCom->sendText("  ?           Print Help\n");
-	pCom->sendText("  PB <byte>   Punch byte\n");
-	pCom->sendText("  PT <string> Punch text\n");
-	pCom->sendText("  PH <record> Punch Intel Hex record\n");
-	pCom->sendText("  PL <n>      Punch n chars of leader/trailer\n");
-	pCom->sendText("  RB          Read byte\n");
-	pCom->sendText("  RH <record> Read Intel Hex record\n");
-	pCom->sendText("  ECHO <1|0>  Set Echo On/Off\n");
-	_eState = sParseCommand;
-	_retCode = rcNoError;
-}
-
-void H10_Manager::doEchoCommand(CH10_Com* pCom)
-{
-	pCom->setEcho(*_pData == '0');
-	_eState = sParseCommand;
-	_retCode = rcNoError;
-}
-
-void H10_Manager::doPunchByteCommand()
-{
-	//SerialUSB.println("doPunchByte");
-
-	switch (_eState)
+	const char* data = parsedCommand.data;
+	const size_t len = parsedCommand.dataLength;
+	if (data[0] != ':')
 	{
-	case sParseData:
-		if (!parseByte(_pData, &_punchData))
+		return;
+	}
+
+	uint8_t byteCount = 0;
+	uint8_t addrHigh = 0;
+	uint8_t addrLow = 0;
+	uint8_t recordType = 0;
+
+	if (!parseHexByte(data, len, 1, byteCount))
+	{
+		return;
+	}
+	if (!parseHexByte(data, len, 3, addrHigh))
+	{
+		return;
+	}
+	if (!parseHexByte(data, len, 5, addrLow))
+	{
+		return;
+	}
+	if (!parseHexByte(data, len, 7, recordType))
+	{
+		return;
+	}
+
+	if (byteCount > sizeof(_hexData))
+	{
+		return;
+	}
+
+	const size_t expectedLen = 1 + 2 + 4 + 2 + (static_cast<size_t>(byteCount) * 2) + 2;
+	if (len != expectedLen)
+	{
+		return;
+	}
+
+	uint8_t checksum = 0;
+	uint8_t sum = 0;
+	sum = static_cast<uint8_t>(sum + byteCount);
+	sum = static_cast<uint8_t>(sum + addrHigh);
+	sum = static_cast<uint8_t>(sum + addrLow);
+	sum = static_cast<uint8_t>(sum + recordType);
+
+	for (size_t i = 0; i < byteCount; ++i)
+	{
+		uint8_t value = 0;
+		if (!parseHexByte(data, len, 9 + (i * 2), value))
 		{
-			
-			_retCode =  rcBadData;
+			_hexDataLength = 0;
 			return;
 		}
 
-		_eState = sPunchReadyWait;
-		break;
-
-	case sPunchReadyWait:
-	case sPunchStartDwell:
-		punchByte();
-		break;
-
-	case sPunchByteDone:
-		if (_eState == sPunchByteDone)
-			_eState = sParseCommand;
-		break;
-
-	case sNone:
-	case sWaitForReaderReady:
-		break;
+		_hexData[i] = value;
+		sum = static_cast<uint8_t>(sum + value);
 	}
 
-	//SerialUSB.print("  Byte: ");
-	//SerialUSB.println(data);
-
-	_retCode = rcNoError;
-}
-
-void H10_Manager::doPunchTextCommand()
-{
-	//SerialUSB.println("doPunchText");
-
-	//int i = 0;
-	//while (_pData[i] != '\0')
-	//	punchCharacter(_pData[i]);
-
-	//SerialUSB.print("  Text: ");
-	//SerialUSB.println(_pData);
-
-}
-
-void H10_Manager::doPunchHexCommand()
-{
-	//parseIntelHex();
-	//SerialUSB.println("doPunchHexCommand");
-}
-
-void H10_Manager::doPunchLeaderCommand()
-{
-	//SerialUSB.println("doPunchLeader");
-
-	switch (_eState)
+	if (!parseHexByte(data, len, 9 + (static_cast<size_t>(byteCount) * 2), checksum))
 	{
-	case sParseData:
-		if (!parseByte(_pData, &_leaderCount))
-		{
-			_retCode = rcBadData;
-			return;
-		}
-
-		_eState = sPunchReadyWait;
-		break;
-
-	case sPunchReadyWait:
-	case sPunchStartDwell:
-		_punchData = 0x00;
-		punchByte();
-		break;
-
-	case sPunchByteDone:
-		if (_eState == sPunchByteDone)
-		{
-			_leaderCount--;
-			if (_leaderCount == 0)
-				_eState = sParseCommand;
-			else
-				_eState = sPunchReadyWait;
-		}
-		break;
-
-	case sNone:
-	case sWaitForReaderReady:
-		break;
+		_hexDataLength = 0;
+		return;
 	}
 
-	//SerialUSB.print("  Leader: ");
-	//for (int i = 0; i < count; i++)
-	//{
-	//	SerialUSB.write('.');
-	//	; // call H10.printByte(0x00);
-	//}
-	//SerialUSB.write('\n');
+	sum = static_cast<uint8_t>(sum + checksum);
+	if (sum != 0)
+	{
+		_hexDataLength = 0;
+		return;
+	}
+
+	_hexDataLength = byteCount;
 }
 
-void H10_Manager::doReadByteCommand()
+void H10_Manager::doPunchLeader(const ParsedCommand& parsedCommand)
 {
-	_retCode = rcInvalidCommand;
+	(void)parsedCommand;
 }
 
-void H10_Manager::doReadHexCommand()
+void H10_Manager::doReadByte(const ParsedCommand& parsedCommand)
 {
-	_retCode = rcInvalidCommand;
+	(void)parsedCommand;
 }
 
+void H10_Manager::doReadHex(const ParsedCommand& parsedCommand)
+{
+	(void)parsedCommand;
+}
 
+H10_Manager::ParsedCommand H10_Manager::getLastCommand() const
+{
+	return _lastCommand;
+}
+
+const char* H10_Manager::getLineBuffer() const
+{
+	return _lineBuffer;
+}
+
+size_t H10_Manager::getLineLength() const
+{
+	return _lineLength;
+}
+
+void H10_Manager::clearLine()
+{
+	memset(_lineBuffer, 0, sizeof(_lineBuffer));
+	_lineLength = 0;
+	_lastCommand.command = cmdNone;
+	_lastCommand.data = nullptr;
+	_lastCommand.dataLength = 0;
+	_comDevice.clearLine();
+}
+
+const char* H10_Manager::getCommandName(eCommand cmd)
+{
+	switch (cmd)
+	{
+		case cmdNone:
+			return "None";
+		case cmdHelp:
+			return "Help (?)";
+		case cmdEcho:
+			return "Echo (EC)";
+		case cmdPunchByte:
+			return "Punch Byte (PB)";
+		case cmdPunchText:
+			return "Punch Text (PT)";
+		case cmdPunchHex:
+			return "Punch Hex (PH)";
+		case cmdPunchLeader:
+			return "Punch Leader (PL)";
+		case cmdReadByte:
+			return "Read Byte (RB)";
+		case cmdReadHex:
+			return "Read Hex (RH)";
+		case cmdUnknown:
+			return "Unknown";
+		default:
+			return "Invalid";
+	}
+}
+
+uint8_t H10_Manager::reverseBits(uint8_t value)
+{
+	value = static_cast<uint8_t>(((value & 0xF0U) >> 4) | ((value & 0x0FU) << 4));
+	value = static_cast<uint8_t>(((value & 0xCCU) >> 2) | ((value & 0x33U) << 2));
+	value = static_cast<uint8_t>(((value & 0xAAU) >> 1) | ((value & 0x55U) << 1));
+	return value;
+}

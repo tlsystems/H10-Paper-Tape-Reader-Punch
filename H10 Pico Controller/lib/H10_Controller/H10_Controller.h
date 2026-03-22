@@ -8,10 +8,10 @@
 #include <SPI.h>
 #include "CircularBuffer.h"
 
-class UART_Communications
+class H10_Controller
 {
 public:
-	UART_Communications(
+	H10_Controller(
 		uint8_t punchStart,
 		uint8_t punchReady,
 		uint8_t readerReady,
@@ -39,7 +39,7 @@ private:
 	uint8_t _readDataLoad;
 	uint8_t _punchDataLatch;
 
-	static UART_Communications* _activeInstance;
+	static H10_Controller* _activeInstance;
 
 	CircularBuffer _punchBuf;
 	CircularBuffer _readerBuf;

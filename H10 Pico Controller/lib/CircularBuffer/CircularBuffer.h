@@ -1,9 +1,3 @@
-#pragma once
-
-#include <stddef.h>
-#include <stdint.h>
-#include "pico/mutex.h"
-
 // Thread-safe circular (ring) buffer for the RP2040.
 // Uses the hardware mutex from the Pico SDK, which is safe across both cores
 // as well as interrupt contexts.
@@ -16,6 +10,12 @@
 //   buf.push(0xAB);
 //   uint8_t b;
 //   if (buf.pop(b)) { /* use b */ }
+
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+#include "pico/mutex.h"
 
 class CircularBuffer
 {

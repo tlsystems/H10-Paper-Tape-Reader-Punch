@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include <spi.h>
-#include "UART_Communications.h"
+#include "ComUART.h"
 #include "H10_Manager.h"
+#include "H10_Controller.h"
 
 #include "defs.h"
 
-UART_Communications h10Controller(PunchStart, PunchReady, ReaderReady, ReaderStart, ReadDataLoad, PunchDataLatch);
-H10_Manager h10Manager(Serial1, RS232_RX, RS232_TX, RS232_RTS, RS232_CTS);
+H10_Controller h10Controller(PunchStart, PunchReady, ReaderReady, ReaderStart, ReadDataLoad, PunchDataLatch);
+ComUART comUART1(Serial1, RS232_RX, RS232_TX, RS232_RTS, RS232_CTS);
 
 // put function declarations here:
 // SPISettings spisettings(1000000, MSBFIRST, SPI_MODE2);
@@ -23,7 +24,7 @@ void setup()
 	pinMode(PB1, INPUT_PULLDOWN);
 
 	// Initialize RS232 port with RTS/CTS handshaking.
-	h10Manager.begin(115200);
+	comUART1.begin(115200);
 
 	SPI.setRX(MISO);
 	SPI.setTX(MOSI);
@@ -60,21 +61,4 @@ void loop()
 		digitalWrite(PICO_LED, !digitalRead(PICO_LED));
 	}
 
-	if (h10Manager.hasLine())
-	{
-		size_t len = h10Manager.readLine(rxLine, sizeof(rxLine));
-		if (len > 0)
-		{
-			Serial.print("RX: ");
-			Serial.print(rxLine);
-			if (rxLine[len - 1] != '\n')
-			{
-				Serial.println();
-			}
-		}
-	}
-
-	if (h10Manager.hasLine())
-	(
-		h10Manager.processCommand();
-
+}
