@@ -28,12 +28,14 @@ public:
 	int available() override;
 	int read() override;
 	size_t write(uint8_t data) override;
+	size_t writeLine(const char* text) override;
 
 private:
 	static constexpr size_t kLineBufferSize = 128;
+	static constexpr size_t kTxBufferSize = 256;
 
-	static void onUartRxIRQ();
-	void handleUartRxIRQ();
+	static void onUartIRQ();
+	void haldleUartIRQ();
 
 	SerialUART& _serialPort;
 	uart_inst_t* _uart;
@@ -46,6 +48,9 @@ private:
 	volatile bool _lineReady;
 	volatile bool _overflow;
 	volatile bool _skipNextLF;
+	volatile char _txBuffer[kTxBufferSize];
+	volatile size_t _txHead;
+	volatile size_t _txTail;
 
 	static ComUART* _activeInstance;
 };

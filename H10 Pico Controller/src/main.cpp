@@ -17,8 +17,6 @@ void setup()
 	// Initialize serial communication for console output
 	Serial.begin(115200);
 
-	Serial.begin(115200);
-
 	pinMode(LED1, OUTPUT);
 	pinMode(LED2, OUTPUT);
 	pinMode(PB1, INPUT_PULLDOWN);
@@ -60,5 +58,14 @@ void loop()
 		lastMillis = curMillis;
 		digitalWrite(PICO_LED, !digitalRead(PICO_LED));
 	}
+}
+
+void setup1()
+{
+	h10Controller.begin();
+}
+
+void loop1()
+{
 
 }
