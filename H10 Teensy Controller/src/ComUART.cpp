@@ -1,3 +1,17 @@
+// ComUART.cpp - Implementation of UART-base serial port
+//
+// Receiving
+//  - setEcho() is used to enable echo of received characters
+//	- Uses Arduino serialEventx to proccess incoming characters
+//	- Received characters are put into a line buffer until LF is received
+//	- CR characters are ignored
+//	- hasLine() returns true if a full line is available
+//  - While hasLine() is true, incomming bytes are not processed
+//	- lineClear() or readLine() methods re-enables character processing
+//
+// Transmission
+//	- 
+
 #include "ComUART.h"
 
 ComUART::ComUART(HardwareSerialIMXRT& serialPort, uint8_t rtsPin, uint8_t ctsPin)	:
@@ -7,36 +21,42 @@ ComUART::ComUART(HardwareSerialIMXRT& serialPort, uint8_t rtsPin, uint8_t ctsPin
 	_lineLength(0),
 	_lineReady(false),
 	_overflow(false),
-	_skipNextLF(false)
+	_echo(true)
 {
 }
 
 void ComUART::begin(uint32_t baudRate, uint16_t config)
 {
 	_serialPort.begin(baudRate, config);
-	_serialPort.attachRts(_rtsPin);
-	_serialPort.attachCts(_ctsPin);
+	//_serialPort.attachRts(_rtsPin);
+	//_serialPort.attachCts(_ctsPin);
 	_lineLength = 0;
 	_lineReady = false;
 	_overflow = false;
-	_skipNextLF = false;
+	_serialPort.addMemoryForWrite(_txBuffer, 144);
+	_serialPort.addMemoryForRead(_rxBuffer, 144);
 }
+
+void ComUART::setEcho(bool enabled)
+{
+	_echo = enabled;
+}
+
+// Rx processing
 
 bool ComUART::hasLine() const
 {
-	pollRx();
 	return _lineReady;
 }
 
-
 size_t ComUART::readLine(char* outBuffer, size_t outBufferSize)
 {
+	digitalWrite(LED1, 0);
 	if ((outBuffer == nullptr) || (outBufferSize == 0))
 	{
 		return 0;
 	}
 
-	pollRx();
 	if (!_lineReady)
 	{
 		outBuffer[0] = '\0';
@@ -58,7 +78,6 @@ size_t ComUART::readLine(char* outBuffer, size_t outBufferSize)
 	_lineLength = 0;
 	_lineReady = false;
 	_overflow = false;
-	_skipNextLF = false;
 
 	return copyLen;
 }
@@ -70,86 +89,50 @@ bool ComUART::overflowed() const
 
 void ComUART::clearLine()
 {
+	digitalWrite(LED1, 0);
 	noInterrupts();
 	_lineLength = 0;
 	_lineBuffer[0] = '\0';
 	_lineReady = false;
 	_overflow = false;
-	_skipNextLF = false;
 	interrupts();
 }
 
-int ComUART::available()
-{
-	pollRx();
-	if (_lineReady)
-	{
-		return static_cast<int>(_lineLength);
-	}
-	return _serialPort.available();
-}
-
-int ComUART::read()
-{
-	pollRx();
-	if (_lineReady && (_lineLength > 0))
-	{
-		char c = _lineBuffer[0];
-		for (size_t i = 1; i < _lineLength; ++i)
-		{
-			_lineBuffer[i - 1] = _lineBuffer[i];
-		}
-		--_lineLength;
-		if (_lineLength == 0)
-		{
-			_lineReady = false;
-		}
-		return static_cast<uint8_t>(c);
-	}
-
-	return _serialPort.read();
-}
-
-void ComUART::pollRx() const
+void ComUART::serviceRx()
 {
 	while (_serialPort.available() > 0)
 	{
-		char c = static_cast<char>(_serialPort.read());
-
-		if (_skipNextLF && (c == '\n'))
-		{
-			_skipNextLF = false;
-			continue;
-		}
-		_skipNextLF = false;
+		char ch = static_cast<char>(_serialPort.read());
+		if (_echo)
+			_serialPort.write(static_cast<uint8_t>(ch));
 
 		if (_lineReady)
-		{
-			continue;
-		}
+			return;
 
-		if ((c == '\r') || (c == '\n'))
+		if (ch == '\r')
+			continue;
+
+		if (ch == '\n')
 		{
 			_lineReady = true;
-			if (c == '\r')
-			{
-				_skipNextLF = true;
-			}
-			break;
+			digitalWrite(LED1, 1);
+			return;
 		}
 
-		if (_lineLength < (kLineBufferSize - 1))
-		{
-			_lineBuffer[_lineLength] = c;
-			++_lineLength;
-			_lineBuffer[_lineLength] = '\0';
-		}
-		else
+		if (_lineLength >= (sizeof(_lineBuffer) - 1))
 		{
 			_overflow = true;
+			return;
 		}
+
+		_lineBuffer[_lineLength] = ch;	 // add char to line buffer
+		_lineLength++;
+		_lineBuffer[_lineLength] = '\0'; // add null terminator
 	}
 }
+
+
+// Tx processing
 
 size_t ComUART::write(uint8_t data)
 {
@@ -159,9 +142,7 @@ size_t ComUART::write(uint8_t data)
 size_t ComUART::writeLine(const char* text)
 {
 	if (text == nullptr)
-	{
 		return 0;
-	}
 
 	const size_t written = _serialPort.print(text);
 	_serialPort.print("\r\n");

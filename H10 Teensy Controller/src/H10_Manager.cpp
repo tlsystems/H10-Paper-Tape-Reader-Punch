@@ -8,70 +8,83 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-extern H10_Controller h10Controller;
-
-
 H10_Manager::H10_Manager(ComUART& comDevice)
 	: _comDevice(comDevice), _lineLength(0), bEcho(false), _hexDataLength(0)
 {
-	memset(_lineBuffer, 0, sizeof(_lineBuffer));
-	_lastCommand.cmd = eCommand::None;
+	memset(_cmdLine, 0, sizeof(_cmdLine));
+	_lastCommand.cmd = eCommand::Invalid;
 	_lastCommand.data = nullptr;
 	_lastCommand.length = 0;
 	memset(_hexData, 0, sizeof(_hexData));
 }
 
+void H10_Manager::begin()
+{
+	h10Controller.begin();
+}
+
 void H10_Manager::update()
 {
-	// Reset to no command
-	sCommand result;
-	result.cmd = eCommand::None;
-	result.data = nullptr;
-	result.length = 0;
-
 	// Check if there's a line ready
 	if (!_comDevice.hasLine())
 		return;
 
 	// Read the line from the com device
-	size_t readLen = _comDevice.readLine(_lineBuffer, kLineBufferSize);
-	_lineLength = readLen;
+	_lineLength = _comDevice.readLine(_cmdLine, sizeof(_cmdLine));
+	//.Serial.printf("Received line: %s\n", _cmdLine);
 
 	// Parse the command
-	if (readLen > 0)
+	if (_lineLength > 0)
 	{
-		result = parseCommand(_lineBuffer, readLen);
-		_lastCommand = result;
+		_lastCommand = parseCommand(_cmdLine, _lineLength);
 	}
 
-	switch (result.cmd)
+	//.Serial.printf("Parsed command: %s, cmdStr: %s\n", getCommandName(_lastCommand.cmd), _cmdLine);
+
+
+	bool ok = false;
+	switch (_lastCommand.cmd)
 	{
-		case eCommand::Echo:		doEcho(result); 		break;
-		case eCommand::PunchByte:	doPunchByte(result);	break;
-		case eCommand::PunchText:	doPunchText(result);	break;	
-		case eCommand::PunchHex:	doPunchHex(result);		break;
-		case eCommand::PunchLeader:	doPunchLeader(result);	break;
-		case eCommand::ReadByte:	doReadByte(result);		break;
-		case eCommand::ReadHex:		doReadHex(result);		break;
+		case eCommand::Help:		ok = doHelp(_lastCommand);		 break;
+		case eCommand::Echo:		ok = doEcho(_lastCommand); 		 break;
+		case eCommand::PunchByte:	ok = doPunchByte(_lastCommand);	 break;
+		case eCommand::PunchText:	ok = doPunchText(_lastCommand);	 break;	
+		case eCommand::PunchHex:	ok = doPunchHex(_lastCommand);	 break;
+		case eCommand::PunchLeader:	ok = doPunchLeader(_lastCommand); break;
+		case eCommand::ReadByte:	ok = doReadByte(_lastCommand);	 break;
+		case eCommand::ReadHex:		doReadHex(_lastCommand);	 break;
 		default:
 			break;
 	}
+
+	if (ok)
+	{
+		_comDevice.writeLine("OK");
+		//.Serial.printf("Executed command: %s\n", getCommandName(_lastCommand.cmd));
+	}	
+	else
+	{
+		_comDevice.writeLine("ERROR");
+		//.Serial.printf("Failed to execute command: %s\n", getCommandName(_lastCommand.cmd));
+	}	
+	
 }
 
 H10_Manager::sCommand H10_Manager::parseCommand(char* line, size_t length)
 {
 	sCommand command;
-	command.cmd = eCommand::None;
+	command.cmd = eCommand::Invalid;
 	command.data = nullptr;
 	command.length = 0;
 
-	if (line == nullptr || length < 1)
+	if (line == nullptr || length == 0)
 	{
-		command.cmd = eCommand::Unknown;
+		command.cmd = eCommand::Invalid;
 		return command;
 	}	
 	
 	// Check if first character is '?' (single character help command)
+	if (line[0] == '?')
 	{
 		command.cmd = eCommand::Help;
 		return command;
@@ -80,7 +93,7 @@ H10_Manager::sCommand H10_Manager::parseCommand(char* line, size_t length)
 	// For other commands, need at least 2 characters
 	if (length < 2)
 	{
-		command.cmd = eCommand::Unknown;
+		command.cmd = eCommand::Invalid;
 	}
 
 	// Extract the first two characters as the command
@@ -88,6 +101,7 @@ H10_Manager::sCommand H10_Manager::parseCommand(char* line, size_t length)
 	cmdStr[0] = static_cast<char>(toupper(line[0]));
 	cmdStr[1] = static_cast<char>(toupper(line[1]));
 	cmdStr[2] = '\0';
+	//.Serial.printf("Command string: %s\n", cmdStr);	
 
 	if (strcmp(cmdStr, "EC") == 0) 		command.cmd = eCommand::Echo;
 	else if (strcmp(cmdStr, "PB") == 0) command.cmd = eCommand::PunchByte;
@@ -105,7 +119,9 @@ H10_Manager::sCommand H10_Manager::parseCommand(char* line, size_t length)
 	// remaining commands all require data
 	if ((length < 4) || (line[2] != ' '))
 	{
-		command.cmd = eCommand::Unknown;
+		command.cmd = eCommand::NoData;
+		command.data = nullptr;
+		command.length = 0;
 		return command;
 	}
 
@@ -133,6 +149,11 @@ bool H10_Manager::doHelp(const sCommand& command)
 bool H10_Manager::doEcho(const sCommand& command)
 {
 	bEcho = command.data[0] == '1';
+	_comDevice.setEcho(bEcho);
+	if (bEcho)
+		_comDevice.writeLine("Echo mode enabled");
+	else
+		_comDevice.writeLine("Echo mode disabled");
 	return true;
 }
 
@@ -162,15 +183,17 @@ bool H10_Manager::doPunchText(const sCommand& command)
 				return false;
 		}
 		// punch character 
+
 		if (!h10Controller.queuePunchByte(0x00))
 			return false;
 	}
+	
 	return true;
-
 }
 
 bool H10_Manager::doPunchHex(const sCommand& command)
 {
+	return true;
 	_hexDataLength = 0;
 
 	if (command.data == nullptr || command.length < 11)
@@ -261,7 +284,7 @@ H10_Manager::sCommand H10_Manager::getLastCommand() const
 
 const char* H10_Manager::getLineBuffer() const
 {
-	return _lineBuffer;
+	return _cmdLine;
 }
 
 size_t H10_Manager::getLineLength() const
@@ -271,9 +294,9 @@ size_t H10_Manager::getLineLength() const
 
 void H10_Manager::clearLine()
 {
-	memset(_lineBuffer, 0, sizeof(_lineBuffer));
+	memset(_cmdLine, 0, sizeof(_cmdLine));
 	_lineLength = 0;
-	_lastCommand.cmd = eCommand::None;
+	_lastCommand.cmd = eCommand::Invalid;
 	_lastCommand.data = nullptr;
 	_lastCommand.length = 0;
 	_comDevice.clearLine();
@@ -283,7 +306,7 @@ const char* H10_Manager::getCommandName(eCommand cmd)
 {
 	switch (cmd)
 	{
-		case eCommand::None:		return "None";
+		case eCommand::Invalid:		return "Invalid";
 		case eCommand::Help:		return "Help (?)";
 		case eCommand::Echo:		return "Echo (EC)";
 		case eCommand::PunchByte:	return "Punch Byte (PB)";
@@ -293,6 +316,7 @@ const char* H10_Manager::getCommandName(eCommand cmd)
 		case eCommand::ReadByte: 	return "Read Byte (RB)";
 		case eCommand::ReadHex: 	return "Read Hex (RH)";
 		case eCommand::Unknown: 	return "Unknown";
+		case eCommand::NoData: 		return "No Data";
 		default: 
 			return "Invalid";
 	}
@@ -306,6 +330,7 @@ uint8_t H10_Manager::reverseBits(uint8_t value)
 	return value;
 }
 
+// parsing functions
 bool H10_Manager::TryParseHexChar(char ch, byte& bt)
 {
 	if (ch >= '0' && ch <= '9')
@@ -343,7 +368,7 @@ bool H10_Manager::parseHexByte(const char* data, size_t dataLen, size_t pos, uin
 	return true;
 }
 
-	bool H10_Manager::parseByteValue(const sCommand& command, uint8_t& outValue)
+bool H10_Manager::parseByteValue(const sCommand& command, uint8_t& outValue)
 	{
 		sCommand cmd = command;
 		
@@ -359,7 +384,7 @@ bool H10_Manager::parseHexByte(const char* data, size_t dataLen, size_t pos, uin
 		return true;
 	};
 
-	bool H10_Manager::parseHexValue(const sCommand& command, uint8_t& outValue)
+bool H10_Manager::parseHexValue(const sCommand& command, uint8_t& outValue)
 	{
 		if (command.length < 2)
 			return false;

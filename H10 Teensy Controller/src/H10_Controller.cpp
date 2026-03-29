@@ -2,61 +2,64 @@
 #include "defs.h"
 H10_Controller* H10_Controller::_activeInstance = nullptr;
 
-H10_Controller::H10_Controller(	uint8_t punchStart,	uint8_t punchReady,	uint8_t readerReady, uint8_t readerStart,
-								uint8_t readDataLoad, uint8_t punchDataLatch) :
-		_punchStart(punchStart),
-		_punchReady(punchReady),
-		_readerReady(readerReady),
-		_readerStart(readerStart),
-		_readDataLoad(readDataLoad),
-		_punchDataLatch(punchDataLatch)
+H10_Controller::H10_Controller()
 {
+	
 }
 
 void H10_Controller::begin()
 {
-	pinMode(_punchStart,     OUTPUT);
-	pinMode(_punchReady,     INPUT);
-	pinMode(_readerStart,    OUTPUT);
-	pinMode(_readerReady,    INPUT);
-	pinMode(_readDataLoad,   OUTPUT);
-	pinMode(_punchDataLatch, OUTPUT);
+	// initialize SPI
+	SPI.setMISO(MISO);
+	SPI.setMOSI(MOSI);
+	SPI.setSCK(SCK);
+	SPI.begin();
 
-	digitalWrite(_punchStart,     LOW);
-	digitalWrite(_readerStart,    LOW);
-	digitalWrite(_readDataLoad,   HIGH);
-	digitalWrite(_punchDataLatch, HIGH);
+	// initialize shift register control pins
+	pinMode(ReadDataLoad, OUTPUT);
+	pinMode(PunchDataLatch, OUTPUT);
+
+	// initialize control pins
+	pinMode(PunchStart, OUTPUT);
+	pinMode(PunchReady, INPUT);
+	pinMode(ReaderReady, INPUT);
+	pinMode(ReaderStart, OUTPUT);
+
+	digitalWrite(PunchStart,     LOW);
+	digitalWrite(ReaderStart,    LOW);
+	digitalWrite(ReadDataLoad,   HIGH);
+	digitalWrite(PunchDataLatch, HIGH);
 
 	_punchLatchCycles = 0;
 	_punchStartCycles = 0;
 
 	// Route punch-ready and reader-ready rising edges to this controller instance.
 	_activeInstance = this;
-	attachInterrupt(digitalPinToInterrupt(_punchReady),  H10_Controller::onPunchReadyISR,  RISING);
-	attachInterrupt(digitalPinToInterrupt(_readerReady), H10_Controller::onReaderReadyISR, RISING);
+	attachInterrupt(digitalPinToInterrupt(PunchReady),  H10_Controller::onPunchReadyISR,  RISING);
+	attachInterrupt(digitalPinToInterrupt(ReaderReady), H10_Controller::onReaderReadyISR, RISING);
 }
 
 // ---------- Reader ----------
 
 bool H10_Controller::isReaderReady()
 {
-	return digitalRead(_readerReady) == HIGH;
+	return digitalRead(ReaderReady) == HIGH;
 }
 
 uint8_t H10_Controller::readByte()
 {
 	// Assert ReaderStart to advance the tape one frame
-	digitalWrite(_readerStart, HIGH);
+	digitalWrite(ReaderStart, HIGH);
 	delayMicroseconds(1);
-	digitalWrite(_readerStart, LOW);
+	digitalWrite(ReaderStart, LOW);
 
 	// Wait for ReaderReady
 	while (!isReaderReady());
 
 	// Latch the parallel data into the shift register
-	digitalWrite(_readDataLoad, LOW);
+	digitalWrite(ReadDataLoad, LOW);
 	delayMicroseconds(1);
-	digitalWrite(_readDataLoad, HIGH);
+	digitalWrite(ReadDataLoad, HIGH);
 
 	// Clock the byte out via SPI
 	return SPI.transfer(0x00);
@@ -76,8 +79,8 @@ void H10_Controller::onReaderReadyISR()
 void H10_Controller::onReaderReady()
 {
 	// Latch the parallel data into the shift register
-	digitalWrite(_readDataLoad, LOW);
-	digitalWrite(_readDataLoad, HIGH);
+	digitalWrite(ReadDataLoad, LOW);
+	digitalWrite(ReadDataLoad, HIGH);
 
 	// Clock the byte out via SPI
 	uint8_t data = SPI.transfer(0x00);
@@ -85,7 +88,7 @@ void H10_Controller::onReaderReady()
 	if (!_readerBuf.push(data))
 	{
 		// Buffer is full – disable this interrupt until the caller drains the buffer
-		detachInterrupt(digitalPinToInterrupt(_readerReady));
+		detachInterrupt(digitalPinToInterrupt(ReaderReady));
 	}
 }
 
@@ -94,11 +97,14 @@ void H10_Controller::onReaderReady()
 
 bool H10_Controller::isPunchReady()
 {
-	return digitalRead(_punchReady) == HIGH;
+	return digitalRead(PunchReady) == HIGH;
 }
 
 bool H10_Controller::queuePunchByte(uint8_t data)
 {
+	punchByteImmediate(data);
+	return true;
+	
 	const bool wasEmpty = _punchBuf.isEmpty();
 	if (!_punchBuf.push(data))
 	{
@@ -117,6 +123,19 @@ bool H10_Controller::queuePunchByte(uint8_t data)
 
 void H10_Controller::punchByteImmediate(uint8_t data)
 {
+	// Display bit pattern with each bit duplicated: 'X' for 1 bits, ' ' for 0 bits (MSB first)
+	char bitStr[17];
+	for (int i = 7; i >= 0; i--)
+	{
+		char bitChar = (data & (1 << i)) ? 'X' : ' ';
+		int idx = (7 - i) * 2;
+		bitStr[idx] = bitChar;
+		bitStr[idx + 1] = bitChar;
+	}
+	bitStr[16] = '\0';
+	Serial.println(bitStr);
+	return;
+
 	// Shift data into the punch data '595
 	SPI.transfer(data);
 
@@ -144,9 +163,9 @@ void H10_Controller::pulsePunchStart(uint32_t pulseCycles)
 {
 	(void)pulseCycles;
 	noInterrupts();
-	digitalWrite(_punchStart, HIGH);
+	digitalWrite(PunchStart, HIGH);
 	delayMicroseconds(1);
-	digitalWrite(_punchStart, LOW);
+	digitalWrite(PunchStart, LOW);
 	interrupts();
 }
 

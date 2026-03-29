@@ -19,13 +19,14 @@
 
 #include <Arduino.h>
 #include <ComUART.h>
+#include "H10_Controller.h"
 
 class H10_Manager
 {
 public:
 	enum class eCommand
 	{
-		None,			// No command parsed
+		Invalid,		// No command parsed
 		Help,			// ? - Help
 		Echo,			// EC - Echo Mode
 		PunchByte,		// PB - Punch byte
@@ -34,7 +35,8 @@ public:
 		PunchLeader,	// PL - Punch leader
 		ReadByte,		// RB - Read byte
 		ReadHex,		// RH - Read Hex record
-		Unknown			// Unknown command
+		Unknown,		// Unknown command
+		NoData			// No data for command	
 	};
 
 	struct sCommand
@@ -48,7 +50,8 @@ public:
 
 public:
 	H10_Manager(ComUART& comDevice);
-
+	
+	void begin();
 	void update();
 
 	sCommand getLastCommand() const;
@@ -83,8 +86,10 @@ private:
 	bool doReadByte(const sCommand& command);
 	bool doReadHex(const sCommand& command);
 
+
+	H10_Controller h10Controller;
 	ComUART& 	_comDevice;
-	char 		_lineBuffer[kLineBufferSize];
+	char 		_cmdLine[kMaxCommandSize];
 	size_t 		_lineLength;
 	sCommand     _lastCommand;
 	bool 		bEcho;

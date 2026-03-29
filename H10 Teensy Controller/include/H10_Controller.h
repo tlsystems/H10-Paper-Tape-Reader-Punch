@@ -14,14 +14,7 @@ constexpr uint32_t kPunchStartPulseTime = 200; // must be at least 200 ns per H1
 class H10_Controller
 {
 public:
-	H10_Controller(
-		uint8_t punchStart,
-		uint8_t punchReady,
-		uint8_t readerReady,
-		uint8_t readerStart,
-		uint8_t readDataLoad,
-		uint8_t punchDataLatch
-	);
+	H10_Controller();
 
 	void begin();
 
@@ -33,15 +26,8 @@ public:
 	bool isPunchReady();
 	bool queuePunchByte(uint8_t data);
 
+	void punchByteImmediate(uint8_t data);
 private:
-
-	uint8_t _punchStart;
-	uint8_t _punchReady;
-	uint8_t _readerReady;
-	uint8_t _readerStart;
-	uint8_t _readDataLoad;
-	uint8_t _punchDataLatch;
-
 	uint16_t _punchLatchCycles;
 	uint16_t _punchStartCycles;
 
@@ -52,7 +38,6 @@ private:
 
 	static void onPunchReadyISR();
 	void onPunchReady();
-	void punchByteImmediate(uint8_t data);
 
 	static void onReaderReadyISR();
 	void onReaderReady();
